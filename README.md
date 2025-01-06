@@ -22,13 +22,15 @@ The idea is to bring a locally hosted LLM to life via a R and Telegram - with a 
 
 
 
-###########################################################################
-#                          2 do                                           #
-# USE SQL to database usernames, first names, lastnames, messages &       #
-# responses                                                               #
-#                                                                         #
-# Fix beginning of script where it answers ALL messages it has ever       #
-# recived (potentially something with message_id and a boolean            #
-# Answered = 0, not = 1, if message < 1 = ANSWER)                         #
-#          I dont know, ill figure it out later                           #
-###########################################################################
+
+
+#                          2 do                                           
+
+USE SQL to database usernames, first names, lastnames, messages & responses                                                               
+
+
+Fix beginning of script where it answers ALL messages it has ever recived (potentially something with message_id and a boolean: Answered = 0, not = 1, if message < 0 = ANSWER)                        
+
+I dont know, ill figure it out later                          
+          
+
