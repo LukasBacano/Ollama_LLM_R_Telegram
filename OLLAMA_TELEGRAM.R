@@ -1,21 +1,29 @@
 library(httr)
 library(jsonlite)
 library(ollamar)
+library(DBI)
+library(RMariaDB)  # For MySQL/MariaDB database connection
 
 # Telegram bot token
-telegram_token <- "YOUR_TELEGRAM_BOT_TOKEN"
+telegram_token <- "YOUR_TOKEN"
+
+# Database connection settings
+db <- dbConnect(
+  MariaDB(),
+  user = "YOUR_USERNAME",         # Your database username
+  password = "YOUR_PASSWORD",     # Your database password
+  dbname = "DB_NAME",       # The name of your database
+  host = "YOUR_HOST_ADDRESS"              # Database host (local or server IP)
+)
 
 # Initialize last_update_id
 last_update_id <- NULL
-
-# Path to the CSV file for logging
-log_file <- "telegram_bot_logs.csv"
 
 # Function to generate response from Ollama
 generate_ollama_response <- function(message) {
   tryCatch({
     # Send message to Ollama model
-    resp <- generate("llama3.2", message)  # Ensure the model name is correct
+    resp <- generate("llama3.2", message)  # Ensure the model name is correct  (dolphin-llama3  - for uncensured version)
     ans <- rbind(resp_process(resp, "df"))
     
     # Return the processed response
@@ -26,34 +34,30 @@ generate_ollama_response <- function(message) {
   })
 }
 
-# Function to log messages to a CSV file
-log_message_to_csv <- function(first_name, last_name, username, user_id, user_message, ollama_response) {
-  # Create a new row of data
-  new_row <- data.frame(
-    first_name = first_name,
-    last_name = last_name,
-    username = username,
-    user_id = user_id,
-    message = user_message,
-    response = ollama_response,
-    timestamp = Sys.time(),
-    stringsAsFactors = FALSE
-  )
+# Function to log messages to SQL database
+log_message_to_db <- function(first_name, last_name, username, user_id, user_message, ollama_response) {
+  # SQL INSERT query
+  query <- "INSERT INTO logs (first_name, last_name, username, user_id, message, response, timestamp) 
+            VALUES (?, ?, ?, ?, ?, ?, ?)"
   
-  # Check if the CSV file exists
-  if (!file.exists(log_file)) {
-    # If the file doesn't exist, create it and write the headers
-    write.csv(new_row, log_file, row.names = FALSE)
-  } else {
-    # Append the new row to the existing file
-    write.table(new_row, log_file, append = TRUE, sep = ",", col.names = FALSE, row.names = FALSE)
-  }
+  tryCatch({
+    # Execute the query with parameters
+    dbExecute(db, query, params = list(
+      first_name, last_name, username, user_id, user_message, ollama_response, Sys.time()
+    ))
+    cat("Message logged to database successfully.\n")
+  }, error = function(e) {
+    cat("Error logging message to database:", e$message, "\n")
+  })
 }
 
 # Main loop
 while (TRUE) {
-  # Fetch updates from Telegram bot
-  response <- GET(paste0("https://api.telegram.org/bot", telegram_token, "/getUpdates"))
+  # Fetch updates from Telegram bot using the last_update_id as offset
+  response <- GET(paste0(
+    "https://api.telegram.org/bot", telegram_token, "/getUpdates",
+    if (!is.null(last_update_id)) paste0("?offset=", last_update_id + 1) else ""
+  ))
   
   # Check if request was successful
   if (status_code(response) != 200) {
@@ -66,25 +70,27 @@ while (TRUE) {
   updates <- fromJSON(content(response, "text", encoding = "UTF-8"))
   
   # Check if there are updates
-  if (!is.null(updates$result) && nrow(updates$result$message) > 0) {
-    # Loop through updates
+  if (!is.null(updates$result) && length(updates$result) > 0) {  # Use length() to check if result exists and is not empty
+    # Iterate through rows of the data frame
     for (i in seq_len(nrow(updates$result))) {
-      update <- updates$result[i, ]
+      # Extract update data
+      update_id <- updates$result$update_id[i]
+      message_data <- updates$result$message[i, ]
       
-      # Skip already processed updates
-      if (!is.null(last_update_id) && update$update_id <= last_update_id) {
+      # Skip if already processed
+      if (!is.null(last_update_id) && update_id <= last_update_id) {
         next
       }
       
       # Update last_update_id
-      last_update_id <- update$update_id
+      last_update_id <- update_id
       
       # Extract message details
-      chat <- update$message$chat
-      user_message <- update$message$text
+      user_message <- message_data$text
+      chat <- message_data$chat
       first_name <- chat$first_name
-      last_name <- chat$last_name
-      username <- chat$username
+      last_name <- ifelse("last_name" %in% names(chat), chat$last_name, "")
+      username <- ifelse("username" %in% names(chat), chat$username, "")
       user_id <- chat$id
       
       # Debugging: Print received message
@@ -93,8 +99,8 @@ while (TRUE) {
       # Generate response using Ollama
       ollama_response <- generate_ollama_response(user_message)
       
-      # Log message to CSV
-      log_message_to_csv(first_name, last_name, username, user_id, user_message, ollama_response)
+      # Log message to SQL database
+      log_message_to_db(first_name, last_name, username, user_id, user_message, ollama_response)
       
       # Send response back to user
       send_response <- POST(
@@ -120,3 +126,4 @@ while (TRUE) {
   # Pause before the next iteration to avoid spamming the server
   Sys.sleep(2)
 }
+
